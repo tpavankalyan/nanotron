@@ -308,7 +308,8 @@ def decode_text(
                         position_ids = get_position_ids(batch_generated_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
-                            position_ids=position_ids,  # [batch_size, seq_len]
+                            input_mask=batch_generated_mask,
+                            #position_ids=position_ids,  # [batch_size, seq_len]
                         )  # [batch_size*seq_len, vocab_size]
 
                     sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
