@@ -5,8 +5,11 @@ Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
 torchrun --nproc_per_node=8 run_train.py --config-file examples/config_tiny_llama.yaml
+
+torchrun --nproc_per_node=4 /datadrive/pavan/CurLL/nanotron/run_train.py --config-file /datadrive/pavan/CurLL/nanotron/examples/config_tiny_llama.yaml
 ```
 """
+
 import argparse
 import time
 from typing import Dict, cast
