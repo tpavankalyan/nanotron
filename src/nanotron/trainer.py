@@ -98,6 +98,7 @@ from nanotron.serialize import (
 )
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer, state_dict_to_device
+import math
 
 logger = logging.get_logger(__name__)
 
@@ -164,6 +165,7 @@ class DistributedTrainer:
             context_parallel_size=self.config.parallelism.context_parallel_size,
         )
 
+        # Load a checkpoint
         self.pre_init()
 
         # Set log levels
@@ -500,6 +502,9 @@ class DistributedTrainer:
         self.initial_iter_step = self.metadata.last_train_step + 1
         self.last_iter_step = self.config.tokens.train_steps
 
+        # validation tracking
+        self.best_val_loss = float("inf")
+
         prof = get_profiler(config=self.config)
         # free memory
         gc.collect()
@@ -526,6 +531,12 @@ class DistributedTrainer:
 
                 if (self.iteration_step - 1) % self.config.logging.iteration_step_info_interval == 0:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
+
+
+                # Run validation 
+                if self.iteration_step % self.config.tokens.val_check_interval == 0:
+                    val_outputs = self.run_validation(dataloader_or_dls["Validation Stage"])
+                    self.validation_logs(val_outputs)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -650,13 +661,111 @@ class DistributedTrainer:
 
         return outputs, loss_avg, z_loss_avg
 
-    def validation_step(self, dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
+    def run_validation(self, val_dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
+        self.model.eval()
+        val_start_time = time.time()
+
+        all_val_outputs = []
+        total_val_loss = 0.0
+        total_val_batches = 0
+
+        with torch.no_grad():
+            for _ in range(self.config.tokens.limit_val_batches):
+                try:
+                    val_output = self.validation_step(val_dataloader)
+                    all_val_outputs.append(val_output)
+
+                    # calculate average loss
+                    batch_loss = torch.stack([output["loss"] for output in val_output if "loss" in output]).mean()
+                    total_val_loss += batch_loss.item()
+                    total_val_batches += 1
+                except StopIteration:
+                    logger.info("Validation dataloader exhausted")
+                    break
+
+        # calculate metrics
+        val_metrics = {}
+        if total_val_batches > 0:
+            val_metrics["val_loss"] = total_val_loss / total_val_batches
+
+            # calculate perplexity
+            val_metrics["val_perplexity"] = math.exp(val_metrics["val_loss"])
+
+        #Calculate time taken
+        val_elapsed_time_ms = (time.time() - val_start_time)*1000
+        val_metrics["val_time_ms"] = val_elapsed_time_ms
+
+        self.model.train()
+        return val_metrics
+
+    def validation_step(self, val_dataloader: Dict[str, Union[Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]], Tuple[Iterator, ...]]]) -> Iterable[Dict]:
+        # Use the validation dataloader from the provided dictionary
+        if isinstance(val_dataloader, dict) and "Validation Stage" in val_dataloader:
+            dataloader = val_dataloader["Validation Stage"]
+        else:
+            dataloader = val_dataloader
+        
+        # Similar to training flow, handle callable dataloaders
+        if callable(dataloader):
+            dataloader = dataloader()
+        
+        # Process the dataloader similarly to training
+        dataloader = sanity_check_dataloader(
+            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+        )
+        
+        # Make it an iterator explicitly
+        dataloader_iter = iter(dataloader)
+        
         outputs = self.pipeline_engine.validate_batch_iter(
             model=self.model,
-            batch=(next(dataloader) for _ in range(self.limit_val_batches)),
-            nb_microbatches=self.limit_val_batches,
+            batch=(next(dataloader_iter) for _ in range(self.config.tokens.limit_val_batches)),
+            nb_microbatches=self.config.tokens.limit_val_batches,
         )
+        
         return outputs
+
+
+
+    def validation_logs(self, val_metrics: Dict) -> None:
+        #only rank from certain ranks to avoid duplicate logs
+        world_rank = dist.get_rank(self.parallel_context.world_pg)
+
+        val_log_entries = [
+            LogItem("val_loss", val_metrics["val_loss"], "human_format"),  # , "1.6E"),
+            LogItem("val_perplexity", val_metrics["val_perplexity"], "human_format"),  # , "1.6E"),
+            LogItem("val_time_ms", val_metrics["val_time_ms"], "human_format"),  # , ".1f"),
+        ]
+
+        if world_rank in self.logger_ranks:
+            assert self.loggerwriter is not None, "loggerwriter should be defined on logger ranks"
+            self.loggerwriter.add_scalars_from_list(val_log_entries, self.iteration_step)
+            logger.info(f"Validation step {self.iteration_step} - Loss: {val_metrics['val_loss']:.4f}, "
+                        f"Perplexity: {val_metrics['val_perplexity']:.4f}")
+
+
+        tp_size = self.parallel_context.tp_pg.size()
+        dp_rank = dist.get_rank(self.parallel_context.dp_pg)
+        tp_rank = dist.get_rank(self.parallel_context.tp_pg)
+
+        should_log_to_wandb = wandb is not None and (
+            (tp_size > 1 and dp_rank == 0 and self.metrics_logging.log_level > 0)
+            or (tp_size > 1 and world_rank == self.logger_ranks[0] and self.metrics_logging.log_level == 0)
+            or (tp_size == 1 and world_rank == self.logger_ranks[0])  # For TP>1, log from each TP group's dp=0 rank
+        )
+
+        if should_log_to_wandb:
+            wandb.log(
+                {log_item.tag: log_item.scalar_value for log_item in val_log_entries},
+                step=self.iteration_step,
+            )
+            log_rank(
+                f"Successfully logged validation metrics to wandb for TP rank {tp_rank}",
+                logger=logger,
+                level=logging.DEBUG,
+                rank=world_rank,
+            )
+
 
     def train_step_logs(
         self,

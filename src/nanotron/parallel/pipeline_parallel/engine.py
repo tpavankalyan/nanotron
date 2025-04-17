@@ -40,7 +40,8 @@ class PipelineEngine(ABC):
         )
 
         # IMPORTANT as it's basically the context manager storing all the intermediary activations
-        state.new_micro_batch_forward()
+        if not torch.is_inference_mode_enabled():
+            state.new_micro_batch_forward()
         with context:
             output = model(**micro_batch)
 
@@ -53,8 +54,9 @@ class PipelineEngine(ABC):
             output["loss"] = output["loss"] / self.nb_microbatches
 
         # Add output as activations that require backward pass
-        if not isinstance(output["loss"], TensorPointer):
-            assert output["loss"].requires_grad
+        # Add output as activations that require backward pass - only needed in training mode
+        if not isinstance(output["loss"], TensorPointer) and not torch.is_inference_mode_enabled():
+            assert output["loss"].requires_grad, "Loss tensor must require gradients during training"
             state.register_activation_requiring_backward(output["loss"])
         return output
 

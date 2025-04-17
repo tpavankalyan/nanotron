@@ -18,6 +18,13 @@ data_stages:
     seed: 42
   name: Stable Training Stage
   start_training_step: 1
+- data:
+    dataset:
+      dataset_folder: /datadrive/pavan/CurLL/data/age_0_5/val
+    num_loading_workers: 1
+    seed: 42
+  name: Validation Stage
+  start_training_step: 2
 general:
   benchmark_csv_path: benchmark_llama.csv
   consumed_train_samples: null
@@ -92,8 +99,8 @@ tokenizer:
 tokens:
   batch_accumulation_per_replica: 1
   limit_test_batches: 0
-  limit_val_batches: 0
+  limit_val_batches: 16
   micro_batch_size: 16
   sequence_length: 2048
   train_steps: 20000
-  val_check_interval: -1
+  val_check_interval: 10
