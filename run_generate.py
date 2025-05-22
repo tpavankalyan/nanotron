@@ -63,7 +63,7 @@ def get_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Maximum number of new tokens to generate")
+    parser.add_argument("--max-new-tokens", type=int, default=256, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
 
@@ -168,35 +168,8 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
-        dummy_inputs = [
-            # "The future of AI is",
-            "Here is a story:\n\nRam is a very good kid. He is very good at math. He is very good at science. He is very good at history. He is very good at geography. He is very good at English. He is very good at Hindi. He is very good at computer science. He is very good at physical education. He is very good at art and craft. He is very good at music. He is very good at dance. He is very good at sports. He is very good at everything he does.\n\nNow answer the following question:\n\nQuestion: What is Ram good at?\n\nAnswer:",
-            # "The future of AI is",
-            # 'Here is an extract from a webpage: "Have you ever experienced heel pain after a heavy physical activity, or even right after a long period of standing? If you regard this as something usual and normal, then think again. Miscalled as heel pain, plantar fasciitis causes these frequent mild pains experienced in the soles of the feet. It is the inflammation and enlargement the plantar fascia tissue that is located in the heels of the feet, stretching to the base of the toes. This tissue is responsible for absorbing shock in the feet and for supporting the arches. It also plays a vital role in foot movements during walking and standing. Many factors such as excessive walking, standing, and running trigger heel pain and plantar fasciitis. A sudden increase in intensity of activities, increase in weight, and abrupt change of footwear also cause the swelling of the ligament. Non-supportive footwear lacking arch cushions and improper and worn out running or training can also lead to the problem. It is also most evident among those". Write an extensive and detailed course unit suitable for a textbook targeted at college students, related to the given extract, within the context of "Medicine". Do not just list concepts, but develop each one in detail before moving to the next, as we prioritize depth of understanding and comprehensive exploration of the subject matter over breadth. Focus on: - Rigor: Ensure in-depth coverage of the concepts/sections. - Engagement: Write with an academic, professional and engaging tone that captivates interest. - Application: Incorporate specific, practical examples, such as proofs in calculus or critical dates and figures in history. Do not include a title or an introduction, simply write the content without headlines and introductory phrases. Do not use images.',
-            # "Advancements in technology will lead to",
-            "Tomorrow's world is shaped by",
-            """Here is a story:
-
-Once upon a time, in a sunny little town, was a playground! Leo the lion loved the playground. It had a big red slide, a swing that went WHOOSH!, and a sandy sandbox.
-
-One day, Leo went to the playground with his friend Mia the monkey. Mia was holding a bright yellow bucket and a little blue shovel. "Let's build a castle!" she said. Leo nodded, his mane bouncing.
-
-They started digging in the sandbox. Leo used his big paws to scoop lots and LOTS of sand. Mia carefully packed it into the bucket. But then, a little cloud came over the sun, and a few raindrops started to fall. *Plink, plink, plink!*
-
-"Oh no!" cried Mia. "Our castle will get washed away!"
-
-Leo looked around. He saw the slide was covered, so nobody could slide. He saw the swings weren't swinging anymore. Then, he had an idea! "Let's cover the castle with my big leaves!" he said, running to a nearby tree. He gathered some big green leaves and they carefully put them over the sandcastle.
-
-The rain stopped after a little while and the sun peeked out again. Mia and Leo took the leaves off their castle. It was still there! It looks a little smushed, but it was still a castle!
-
-"Yay! We saved it!" shouted Mia. Leo smiled. Building a castle with a friend, even when it rained, was the best! They played on the slide and swings until it was time to go home. Leo was so happy he helped save his friend's castle. He knew Mia was happy too, because she gave him a big hug!
-
-Now, can you tell me - what do you think Mia was feeling when the rain started? And why did Leo run to the tree? Do you think they'll play at the playground again tomorrow? Why?
-
-Answer some questions based on the context above:
-
-Question: Mia was making a castle, but then it started to rain. How do you think Mia felt when the rain started falling on her castle? Tell me why you think she felt that way.""",
-        ]
+        dummy_inputs = ["""<|user|>Describe yourself
+<|assistant|>"""]
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -205,7 +178,7 @@ Question: Mia was making a castle, but then it started to rain. How do you think
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
+            generation_config=GenerationArgs(sampler="top_p", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )

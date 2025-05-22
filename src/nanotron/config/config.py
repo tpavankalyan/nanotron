@@ -325,6 +325,7 @@ class TokensArgs:
     val_check_interval: Optional[int] = -1
     limit_val_batches: Optional[int] = 0
     limit_test_batches: Optional[int] = 0
+    validation_steps: Optional[int] = 0
 
 
 @dataclass

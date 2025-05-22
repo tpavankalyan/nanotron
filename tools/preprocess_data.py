@@ -25,7 +25,7 @@ def get_args():
     group.add_argument(
         "--eos-token",
         type=str,
-        default=None,
+        default='<|endoftext|>',
         help="EOS token to add after each document. Default: None",
     )
 

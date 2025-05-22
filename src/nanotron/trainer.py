@@ -99,6 +99,8 @@ from nanotron.serialize import (
 from nanotron.serialize.metadata import DataStageMetadata, TrainingMetadata
 from nanotron.serialize.optimizer import load_optimizer, state_dict_to_device
 import math
+import itertools
+
 
 logger = logging.get_logger(__name__)
 
@@ -326,6 +328,13 @@ class DistributedTrainer:
 
         current_time = datetime.datetime.now().strftime("%d/%m/%Y_%H:%M:%S")
 
+        # print the model architecture
+        if self.loggerwriter is not None:
+            logger.info(f"Model architecture: {self.model}\n")
+            logger.info(f"Number of Parameters: {sum(p.numel() for p in self.model.parameters())}\n")
+        
+
+
         # Initialize wandb for each TP group if TP > 1, but only for dp=0 ranks
         if wandb is not None:
             tp_size = self.parallel_context.tp_pg.size()
@@ -533,10 +542,10 @@ class DistributedTrainer:
                     self.train_step_logs(outputs=outputs, loss_avg=loss_avg, z_loss_avg=z_loss_avg)
 
 
-                # Run validation 
-                if self.iteration_step % self.config.tokens.val_check_interval == 0:
-                    val_outputs = self.run_validation(dataloader_or_dls["Validation Stage"])
-                    self.validation_logs(val_outputs)
+                # # Run validation 
+                # if self.iteration_step % self.config.tokens.val_check_interval == 0:
+                #     val_outputs = self.run_validation_new(dataloader_or_dls["val"])
+                #     self.validation_logs(val_outputs)
 
                 # Checkpoint
                 if self.iteration_step % self.config.checkpoints.checkpoint_interval == 0:
@@ -660,6 +669,68 @@ class DistributedTrainer:
         self.post_train_step()
 
         return outputs, loss_avg, z_loss_avg
+
+    def run_validation_new(self, val_dataloader):
+        self.model.eval()
+        val_start = time.time()
+        total_loss = 0.0
+        n_batches   = 0
+
+        # If you're doing pipeline‐parallel microbatches, you can still chunk each
+        # "global batch" into microbatches, but use itertools.islice to advance once.
+        # Use the validation dataloader from the provided dictionary
+        if isinstance(val_dataloader, dict) and "val" in val_dataloader:
+            dataloader = val_dataloader["val"]
+        else:
+            dataloader = val_dataloader
+        
+        # Similar to training flow, handle callable dataloaders
+        if callable(dataloader):
+            dataloader = dataloader()
+        
+        # Process the dataloader similarly to training
+        dataloader = sanity_check_dataloader(
+            dataloader=dataloader, parallel_context=self.parallel_context, config=self.config
+        )
+        dataloader_iter = iter(dataloader)
+
+        with torch.no_grad():
+            while True:
+                # grab up to M microbatches for one pipeline pass…
+                microbatches = list(itertools.islice(
+                    dataloader_iter,
+                    self.config.tokens.micro_batch_size * self.n_micro_batches_per_batch
+                ))
+                if not microbatches:
+                    break   # no more data
+
+                # run exactly len(microbatches) microbatches in one call
+                outputs = self.pipeline_engine.validate_batch_iter(
+                    model=self.model,
+                    batch=(mb for mb in microbatches),
+                    nb_microbatches=len(microbatches),
+                )
+
+                # accumulate loss across those microbatches
+                losses = [out["loss"] for out in outputs if "loss" in out]
+                batch_loss = torch.stack(losses).mean().item()
+
+                total_loss += batch_loss
+                n_batches   += 1
+                logger.info(f"Validation batch loss: {batch_loss:.4f}")
+
+        # final metrics
+        val_loss       = total_loss / n_batches
+        val_perplexity = math.exp(val_loss)
+        elapsed_ms     = (time.time() - val_start) * 1_000
+
+        self.model.train()
+        return {
+            "val_loss":       val_loss,
+            "val_perplexity": val_perplexity,
+            "val_time_ms":    elapsed_ms,
+        }
+
 
     def run_validation(self, val_dataloader: Iterator[Dict[str, Union[torch.Tensor, TensorPointer]]]) -> Iterable[Dict]:
         self.model.eval()

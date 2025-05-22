@@ -64,6 +64,7 @@ def get_dataloader_from_data_stage(
     data: DataArgs,
     consumed_train_samples: int,
     num_remaining_train_steps: int,
+    stage_name: str,
 ):
     """
     Returns a dataloader for a given data stage.
@@ -194,30 +195,56 @@ def get_dataloader_from_data_stage(
             # Check if eos_token exists
             
             assert data.dataset.return_positions or eos_token_id is not None, "If return_positions is True, eos_token_id must be defined"
-            log_rank(
-                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
+            if stage_name == "val":
+                log_rank(
+                f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.validation_steps * trainer.global_batch_size} validation samples",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
-            )
-            start_time = time.time()
-            train_dataset = Nanoset(
-                dataset_folders=data.dataset.dataset_folder,
-                sequence_length=trainer.sequence_length,
-                token_size=data.dataset.token_size_in_bytes,
-                train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
-                dataset_weights=data.dataset.dataset_weights,
-                random_seed=data.seed,
-                return_positions=data.dataset.return_positions,
-                eos_token_id=eos_token_id,
-            )
-            end_time = time.time()
-            log_rank(
-                f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)",
-                logger=logger,
-                level=logging.INFO,
-                rank=0,
-            )
+                )
+                start_time = time.time()
+                train_dataset = Nanoset(
+                    dataset_folders=data.dataset.dataset_folder,
+                    sequence_length=trainer.sequence_length,
+                    token_size=data.dataset.token_size_in_bytes,
+                    train_split_num_samples=trainer.config.tokens.validation_steps * trainer.global_batch_size,
+                    dataset_weights=data.dataset.dataset_weights,
+                    random_seed=data.seed,
+                    return_positions=data.dataset.return_positions,
+                    eos_token_id=eos_token_id,
+                )
+                end_time = time.time()
+                log_rank(
+                    f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+            else:
+                log_rank(
+                    f"[Nanoset] Creating Nanoset with {len(data.dataset.dataset_folder)} dataset folders and {trainer.config.tokens.train_steps * trainer.global_batch_size} train samples",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
+                start_time = time.time()
+                train_dataset = Nanoset(
+                    dataset_folders=data.dataset.dataset_folder,
+                    sequence_length=trainer.sequence_length,
+                    token_size=data.dataset.token_size_in_bytes,
+                    train_split_num_samples=trainer.config.tokens.train_steps * trainer.global_batch_size,
+                    dataset_weights=data.dataset.dataset_weights,
+                    random_seed=data.seed,
+                    return_positions=data.dataset.return_positions,
+                    eos_token_id=eos_token_id,
+                )
+                end_time = time.time()
+                log_rank(
+                    f"[Nanoset] Time taken to create Nanoset: {time.strftime('%M:%S', time.gmtime(end_time - start_time))} (MM:SS)",
+                    logger=logger,
+                    level=logging.INFO,
+                    rank=0,
+                )
         # Prepare dataloader
         train_dataloader = build_nanoset_dataloader(
             train_dataset,
@@ -273,6 +300,7 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
                 num_remaining_train_steps=num_remaining_train_steps,
+                stage_name=stage.name,
             )
             if stage_idx == 0
             else lambda stage=stage: get_dataloader_from_data_stage(
@@ -280,7 +308,9 @@ def get_dataloader(trainer: DistributedTrainer) -> Dict[str, DataLoader]:
                 stage.data,
                 consumed_train_samples=consumed_train_samples,
                 num_remaining_train_steps=num_remaining_train_steps,
-            )
+                stage_name=stage.name,
+            ) 
+
         )
         dataloaders[stage.name] = dataloader
     return dataloaders
