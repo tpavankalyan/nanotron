@@ -60,7 +60,7 @@ logger = logging.get_logger(__name__)
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt-path", type=Path, required=True, help="Checkpoint path")
-    parser.add_argument("--dp", type=int, default=1)
+    parser.add_argument("--dp", type=int, default=4)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Maximum number of new tokens to generate")
@@ -168,7 +168,7 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
-        dummy_inputs = ["""<|user|>Describe yourself
+        dummy_inputs = ["""<|user|>Tell me a word that starts with the letter "A"
 <|assistant|>"""]
 
         outputs = decode_text(

@@ -1,13 +1,13 @@
 checkpoints:
   checkpoint_interval: 1000 #
-  checkpoints_path: checkpoints/stages_0_1_mix
+  checkpoints_path: checkpoints/stages_1_mix
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
 data_stages:
 - data:
     dataset:
-      dataset_folder: /datadrive/pavan/CurLL/data/Experiments/stages_0_1_mix
+      dataset_folder: /datadrive/pavan/CurLL/data/Experiments/stages_1_mix
     num_loading_workers: 1
     seed: 42
   name: Stable Training Stage
@@ -24,7 +24,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: tinystories
-  run: stages_0_1_mix
+  run: stages_1_mix
   seed: 42
   step: null
 lighteval: null
@@ -42,14 +42,14 @@ model:
     bos_token_id: 50256
     eos_token_id: 50256
     hidden_act: gelu_new
-    hidden_size: 1024
+    hidden_size: 576
     initializer_range: 0.02
-    intermediate_size: 4096 # figure this out for 33M 
+    intermediate_size: 1536 # figure this out for 33M 
     is_llama_config: true
-    max_position_embeddings: 2048
-    num_attention_heads: 16
-    num_hidden_layers: 8
-    num_key_value_heads: 16
+    max_position_embeddings: 8192
+    num_attention_heads: 9
+    num_hidden_layers: 30
+    num_key_value_heads: 9
     pretraining_tp: 1
     rms_norm_eps: 1.0e-05
     rope_scaling: null
@@ -63,9 +63,9 @@ optimizer:
   learning_rate_scheduler:
     learning_rate: 0.0005
     lr_decay_starting_step: 0
-    lr_decay_steps: 3500
+    lr_decay_steps: 2000
     lr_decay_style: cosine
-    lr_warmup_steps: 200
+    lr_warmup_steps: 150
     lr_warmup_style: linear
     min_decay_lr: 1.0e-06
   optimizer_factory:
@@ -94,7 +94,7 @@ tokens:
   micro_batch_size: 32                # 
   batch_accumulation_per_replica: 4   # effective batch size = 32 × 4 × 4 = 512
   sequence_length: 2048               # batch size in tokens = 1024 x 2048 = 2097152
-  train_steps: 3500                    # Approximately 2 epochs (3579852000x2 / 2097152 = 3500)
+  train_steps: 2000                    # Approximately 2 epochs (2093560664x2 / 2097152 = 1996)
   val_check_interval: 2
   limit_test_batches: 0
   limit_val_batches: 64
