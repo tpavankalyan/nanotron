@@ -4,7 +4,7 @@ Nanotron Inference Script
 Usage:
 ```
 export CUDA_DEVICE_MAX_CONNECTIONS=1 # important for some distributed operations
-torchrun --nproc_per_node=1 run_generate.py --ckpt-path checkpoints/10
+torchrun --nproc_per_node=1 run_generate.py --ckpt-path /datadrive/pavan/CurLL/nanotron/checkpoints/stages_0_1_mix/3500
 ```
 """
 
@@ -169,6 +169,9 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         dummy_inputs = ["""<|user|>Tell me a word that starts with the letter "A"
+<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
+<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
+<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
 <|assistant|>"""]
 
         outputs = decode_text(
@@ -178,10 +181,12 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="top_p", use_cache=args.use_cache),
+            generation_config=GenerationArgs(sampler="top_k", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
+        # print(f"Number of outputs: {len(outputs)}")
+
         for output in outputs:
             input_ids = output.input_ids
             generated_ids = output.generation_ids

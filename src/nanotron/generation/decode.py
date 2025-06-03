@@ -50,6 +50,16 @@ class GenerationOutput:
     return_logits: Optional[Union[torch.Tensor, TensorPointer]] = None
 
 
+# @dataclasses.dataclass
+# class GenerationStates:
+#     new_input_ids: Union[torch.Tensor, TensorPointer]
+#     new_input_mask: Union[torch.Tensor, TensorPointer]
+#     store: Store
+
+#     # The rest of the state I need to reconstruct the generated output
+#     generation_ids: List[Union[torch.Tensor, TensorPointer]]
+#     generation_mask: List[Union[torch.Tensor, TensorPointer]]
+
 @dataclasses.dataclass
 class GenerationStates:
     new_input_ids: Union[torch.Tensor, TensorPointer]
@@ -59,6 +69,8 @@ class GenerationStates:
     # The rest of the state I need to reconstruct the generated output
     generation_ids: List[Union[torch.Tensor, TensorPointer]]
     generation_mask: List[Union[torch.Tensor, TensorPointer]]
+    generation_logits: List[Union[torch.Tensor, TensorPointer]] # Added this line
+# --- End of GenerationStates Definition ---
 
 
 @dataclasses.dataclass
@@ -194,6 +206,7 @@ def get_position_ids(input_ids, tokenizer):
     return position_ids
 
 
+
 @torch.inference_mode()
 def decode_text(
     input_iter: Iterable[GenerationInput],
@@ -206,6 +219,8 @@ def decode_text(
     max_new_tokens: int,
     is_bench: bool = False,
     logits_are_batch_first: bool = True,
+    # Added returns_logits to the signature as it's used in the calling script
+    returns_logits: bool = True,
 ) -> Generator[GenerationOutput, None, None]:
     """We assume the following:
     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
@@ -270,6 +285,7 @@ def decode_text(
                     store=Store(),
                     generation_ids=[batch.input_ids],
                     generation_mask=[batch.input_masks],
+                    generation_logits=[], # Initialize empty list for logits
                 )
                 for batch in batches
             )
@@ -292,12 +308,12 @@ def decode_text(
                     # Get the new logits
                     if generation_config.use_cache:
                         raise NotImplementedError("Use-cache is not supported for now")
-                        with attach_store(model=model, store=state.store):
-                            position_ids = get_position_ids(state.new_input_ids, tokenizer)
-                            sharded_logits = model(
-                                input_ids=state.new_input_ids,
-                                position_ids=position_ids,  # [batch_size, seq_len]
-                            )
+                        # with attach_store(model=model, store=state.store):
+                        #     position_ids = get_position_ids(state.new_input_ids, tokenizer)
+                        #     sharded_logits = model(
+                        #         input_ids=state.new_input_ids,
+                        #         position_ids=position_ids,  # [batch_size, seq_len]
+                        #     )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
@@ -311,10 +327,26 @@ def decode_text(
                             input_mask=batch_generated_mask,
                             #position_ids=position_ids,  # [batch_size, seq_len]
                         )  # [batch_size*seq_len, vocab_size]
+                        # print(sharded_logits.shape)
+                        #print if there is nan or inf
+                        if torch.isnan(sharded_logits).any() or torch.isinf(sharded_logits).any():
+                            logger.error("Found NaN or Inf in logits")
+                            raise ValueError("Found NaN or Inf in logits")
 
                     sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
                     if isinstance(sharded_logits, torch.Tensor) and not logits_are_batch_first:
                         sharded_logits = sharded_logits.transpose(0, 1)
+                        sharded_logits = sharded_logits.contiguous()
+
+                    # Store logits for the current generated token
+                    if returns_logits:
+                        if is_decoder_logit_rank:
+                            # Logits for the last token in the sequence
+                            logits_for_current_token = sharded_logits[:, -1:, :].contiguous() # Keep 3 dims for stacking
+                            state.generation_logits.append(logits_for_current_token)
+                        else:
+                            state.generation_logits.append(TensorPointer(group_rank=decoder_logit_rank))
+
                     # Communicate
                     nb_send: int = 0
                     if is_decoder_input_rank:
@@ -358,7 +390,7 @@ def decode_text(
                         else:
                             raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
 
-                        new_decoder_input_ids = sampler(sharded_logits=sharded_logits[:, -1, :])
+                        new_decoder_input_ids = sampler(sharded_logits=sharded_logits[:, -1, :].contiguous())
 
                         # TODO @thomasw21: Handle this correctly, ie from some point after <eos> this should only generate masked tokens
                         # TODO @thomasw21: Actually I can probably build this thing on the next device directly. Will save some communication
@@ -427,6 +459,7 @@ def decode_text(
                         store=state.store,
                         generation_ids=state.generation_ids + [new_decoder_input_ids_and_mask[0]],
                         generation_mask=state.generation_mask + [new_decoder_input_ids_and_mask[1]],
+                        generation_logits=state.generation_logits, # Keep the accumulated logits
                     )
                     for state, new_decoder_input_ids_and_mask in zip(
                         new_decoder_states, all_new_decoder_input_ids_and_mask
@@ -487,20 +520,65 @@ def decode_text(
                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+                    if returns_logits:
+                        assert all(isinstance(elt, torch.Tensor) for elt in state.generation_logits)
+                        # Stack the list of [batch_size, 1, vocab_size] tensors into [batch_size, num_generated_tokens, vocab_size]
+                        batch_generated_logits = torch.cat(state.generation_logits, dim=1)
+                    else:
+                        batch_generated_logits = None
                 else:
                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)
                     batch_generated_mask = TensorPointer(group_rank=decoder_input_rank)
+                    if returns_logits:
+                        # If not on the decoder_input_rank, logits are TensorPointers
+                        batch_generated_logits = TensorPointer(group_rank=decoder_input_rank)
+                    else:
+                        batch_generated_logits = None
 
-                # Broadcast all data
+                # Broadcast all data (ids, masks, and now logits)
+                # Note: The source for broadcasting generated_ids/mask is decoder_input_rank
+                # The source for broadcasting logits is decoder_logit_rank.
+                # To simplify, we'll broadcast generated_ids/mask from input_rank, and logits from logit_rank.
+                # If decoder_input_rank is not decoder_logit_rank, the logits will be TensorPointer on input_rank
+                # and will need to be received.
+
+                # Let's adjust the broadcasting. The original code broadcasts input_ids and input_masks from decoder_input_rank.
+                # And generated_ids and generated_mask are also broadcasted from decoder_input_rank.
+                # This means that on decoder_input_rank, the actual tensors are available.
+                # For logits, they are only actual tensors on decoder_logit_rank.
+                # So, we need to gather logits to decoder_input_rank if we want them there.
+
+                # For simplicity and consistency with how `input_ids` and `generated_ids` are handled,
+                # we'll ensure that `batch_generated_logits` is correctly populated on `decoder_input_rank`
+                # by broadcasting from `decoder_logit_rank`.
+
+                # If current rank is decoder_logit_rank, prepare the logits for broadcasting.
+                # Otherwise, it will receive them.
+                logits_to_broadcast = None
+                if returns_logits:
+                    if dist.get_rank(parallel_context.pp_pg) == decoder_logit_rank:
+                        # This is the rank that has the actual logits
+                        logits_to_broadcast = batch_generated_logits
+                    else:
+                        # Other ranks will receive a TensorPointer, or None if not returns_logits
+                        logits_to_broadcast = TensorPointer(group_rank=decoder_logit_rank)
+
+                # Broadcast generated IDs and masks from decoder_input_rank
                 batch_generated_ids, batch_generated_mask = broadcast_tensors(
                     [batch_generated_ids, batch_generated_mask],
                     group_src=decoder_input_rank,
                     group=parallel_context.pp_pg,
                 )
-                batch.input_ids, batch.input_masks = broadcast_tensors(
-                    [batch.input_ids, batch.input_masks], group_src=decoder_input_rank, group=parallel_context.pp_pg
-                )
+
+                # Broadcast logits from decoder_logit_rank
+                if returns_logits:
+                    batch_generated_logits = broadcast_tensors(
+                        [logits_to_broadcast],
+                        group_src=decoder_logit_rank,
+                        group=parallel_context.pp_pg,
+                    )[0] # broadcast_tensors returns a list, so take the first element
+
 
                 # Flush the store to release memory
                 state.store.flush()
@@ -522,15 +600,363 @@ def decode_text(
                     if dist.get_rank(parallel_context.pp_pg) == decoder_input_rank:
                         input_ids = batch.input_ids[i]
                         input_mask = batch.input_masks[i]
+                        current_logits = batch_generated_logits[i] if returns_logits else None
+
                         yield GenerationOutput(
                             input_ids=input_ids[input_mask],
                             generation_ids=generated_ids[generated_mask],
+                            return_logits=current_logits, # Pass the collected logits
                         )
                     else:
                         yield GenerationOutput(
                             input_ids=TensorPointer(group_rank=decoder_input_rank),
                             generation_ids=TensorPointer(group_rank=decoder_input_rank),
+                            return_logits=TensorPointer(group_rank=decoder_input_rank) if returns_logits else None, # Pass TensorPointer for logits
                         )
+
+# @torch.inference_mode()
+# def decode_text(
+#     input_iter: Iterable[GenerationInput],
+#     tokenizer: "PreTrainedTokenizer",
+#     model: LlamaModel,
+#     parallel_context: ParallelContext,
+#     generation_config: GenerationArgs,
+#     tokenizer_config: Optional[TokenizerConfig],
+#     max_micro_batch_size: int,
+#     max_new_tokens: int,
+#     is_bench: bool = False,
+#     logits_are_batch_first: bool = True,
+# ) -> Generator[GenerationOutput, None, None]:
+#     """We assume the following:
+#     - Everyone receives ALL the input text. # TODO @thomasw21: technically only specific ranks need to receive input.
+#     - Only a specific rank will output the generated text_ids as `torch.Tensor`, the others return a `TensorPointer`. # TODO @thomasw21: Maybe all ranks should return the text.
+#     - We assume that within a model replica, the inputs are already synchronized.
+#     """
+#     decoder_input_rank, decoder_logit_rank = get_min_max_rank(module=model)
+
+#     if generation_config:
+#         if isinstance(generation_config.sampler, str):
+#             sampler_type = SamplerType(generation_config.sampler.upper())
+#         else:
+#             sampler_type = generation_config.sampler
+#     else:
+#         sampler_type = SamplerType.GREEDY
+
+#     # Compute flag
+#     is_decoder_input_rank = dist.get_rank(parallel_context.pp_pg) == decoder_input_rank
+#     is_decoder_logit_rank = dist.get_rank(parallel_context.pp_pg) == decoder_logit_rank
+#     max_nb_microbatches = decoder_logit_rank - decoder_input_rank + 1
+
+#     p2p = model.p2p
+
+#     # replicate input for n_samples times when using TOP_P or TOP_K samplers, in order to get diverse results
+#     if generation_config and generation_config.n_samples:
+#         if sampler_type != SamplerType.TOP_P and sampler_type != SamplerType.TOP_K:
+#             raise ValueError("Only support n_samples for TOP_P and TOP_K sampler")
+#         input_iter = [
+#             GenerationInput(text=input.text) for input in input_iter for _ in range(generation_config.n_samples)
+#         ]
+
+#     # That's annoying but I need this as soon as there's a change communication "cross"
+#     pipeline_state = PipelineEvalBatchState()
+#     with attach_pipeline_state_to_model(model=model, pipeline_state=pipeline_state):
+#         # We query the first `pipeline_size` batches
+#         for batches in chunks(
+#             iterable=micro_batcher(
+#                 input_iter=input_iter,
+#                 tokenizer=tokenizer,
+#                 max_micro_batch_size=max_micro_batch_size,
+#                 tokenizer_config=tokenizer_config,
+#                 input_rank=decoder_input_rank,
+#                 parallel_context=parallel_context,
+#             ),
+#             chunk_size=max_nb_microbatches,
+#         ):
+#             if len(batches) == 0:
+#                 # It means we're out of element
+#                 return
+
+#             # Number of micro batches
+#             number_states_in_buffer = len(batches)
+#             # Otherwise the pipelining doesn't work
+#             assert number_states_in_buffer <= max_nb_microbatches
+#             is_max_nb_microbatches = number_states_in_buffer == max_nb_microbatches
+
+#             # Initialize decoder states
+#             decoder_states: Iterable[GenerationStates] = (
+#                 GenerationStates(
+#                     new_input_ids=batch.input_ids,
+#                     new_input_mask=batch.input_masks,
+#                     store=Store(),
+#                     generation_ids=[batch.input_ids],
+#                     generation_mask=[batch.input_masks],
+#                 )
+#                 for batch in batches
+#             )
+
+#             if is_bench:
+#                 start_time, elapsed_time_first_iteration = time.perf_counter(), 0
+
+#             for generation_iter in tqdm(range(max_new_tokens), desc="Generating"):
+
+#                 if is_bench and generation_iter == 0:
+#                     torch.cuda.synchronize()
+#                     elapsed_time_first_iteration = start_time - time.perf_counter()
+
+#                 all_new_decoder_input_ids_and_mask_same_rank: List[
+#                     Tuple[Union[torch.LongTensor, TensorPointer], Union[torch.BoolTensor, TensorPointer]]
+#                 ] = []
+#                 new_decoder_states: List[GenerationStates] = []
+#                 for state_id, state in enumerate(decoder_states):
+#                     new_decoder_states.append(state)
+#                     # Get the new logits
+#                     if generation_config.use_cache:
+#                         raise NotImplementedError("Use-cache is not supported for now")
+#                         with attach_store(model=model, store=state.store):
+#                             position_ids = get_position_ids(state.new_input_ids, tokenizer)
+#                             sharded_logits = model(
+#                                 input_ids=state.new_input_ids,
+#                                 position_ids=position_ids,  # [batch_size, seq_len]
+#                             )
+#                     else:
+#                         if isinstance(state.new_input_ids, torch.Tensor):
+#                             batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+#                             batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+#                         else:
+#                             batch_generated_ids = state.new_input_ids
+#                             batch_generated_mask = state.new_input_mask
+#                         position_ids = get_position_ids(batch_generated_ids, tokenizer)
+#                         sharded_logits = model(
+#                             input_ids=batch_generated_ids,
+#                             input_mask=batch_generated_mask,
+#                             #position_ids=position_ids,  # [batch_size, seq_len]
+#                         )  # [batch_size*seq_len, vocab_size]
+#                         # print(sharded_logits.shape)
+#                         #print if there is nan or inf
+#                         if torch.isnan(sharded_logits).any() or torch.isinf(sharded_logits).any():
+#                             logger.error("Found NaN or Inf in logits")
+#                             raise ValueError("Found NaN or Inf in logits")
+
+#                     sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
+#                     if isinstance(sharded_logits, torch.Tensor) and not logits_are_batch_first:
+#                         sharded_logits = sharded_logits.transpose(0, 1)
+#                         sharded_logits = sharded_logits.contiguous()
+#                     # Communicate
+#                     nb_send: int = 0
+#                     if is_decoder_input_rank:
+#                         if is_max_nb_microbatches:
+#                             if generation_iter == 0:
+#                                 if state_id == number_states_in_buffer - 1:
+#                                     # `2` is because we receive decoder_ids AND decoder_mask from last rank
+#                                     nb_send = len(pipeline_state.microbatches_activations_to_send) - 2
+#                                 else:
+#                                     # Send everything
+#                                     nb_send = len(pipeline_state.microbatches_activations_to_send)
+#                             else:
+#                                 # `2` is because we receive decoder_ids AND decoder_mask from last rank
+#                                 nb_send = len(pipeline_state.microbatches_activations_to_send) - 2
+#                         else:
+#                             if number_states_in_buffer - 1 == state_id or generation_iter == 0:
+#                                 # Send everything
+#                                 nb_send = len(pipeline_state.microbatches_activations_to_send)
+#                             else:
+#                                 # `2` is because we receive decoder_ids AND decoder_mask from last rank
+#                                 nb_send = len(pipeline_state.microbatches_activations_to_send) - 2
+#                     else:
+#                         if state_id == number_states_in_buffer - 1:
+#                             if not is_max_nb_microbatches:
+#                                 nb_send = len(pipeline_state.microbatches_activations_to_send)
+#                     for _ in range(nb_send):
+#                         pipeline_state.run_communication()
+
+#                     if is_decoder_logit_rank:
+#                         assert isinstance(sharded_logits, torch.Tensor)
+
+#                         # run a logit chooser.
+#                         if sampler_type == SamplerType.GREEDY:
+#                             sampler = GreedySampler(pg=parallel_context.tp_pg)
+#                         elif sampler_type == SamplerType.TOP_K:
+#                             sampler = TopKSampler(pg=parallel_context.tp_pg)
+#                         elif sampler_type == SamplerType.TOP_P:
+#                             sampler = TopPSampler(pg=parallel_context.tp_pg)
+#                         elif sampler_type == SamplerType.BASIC:
+#                             sampler = BasicSampler(pg=parallel_context.tp_pg)
+#                         else:
+#                             raise NotImplementedError(f"Sampler type {sampler_type} is not implemented")
+
+#                         new_decoder_input_ids = sampler(sharded_logits=sharded_logits[:, -1, :].contiguous())
+
+#                         # TODO @thomasw21: Handle this correctly, ie from some point after <eos> this should only generate masked tokens
+#                         # TODO @thomasw21: Actually I can probably build this thing on the next device directly. Will save some communication
+#                         new_decoder_input_mask = torch.ones(
+#                             size=(new_decoder_input_ids.shape[0], 1),
+#                             dtype=torch.bool,
+#                             device=new_decoder_input_ids.device,
+#                         )
+
+#                         # TODO @thomasw21: We need to have stop condition.
+
+#                         # broadcast new_tokens to everyone
+#                         if decoder_input_rank == decoder_logit_rank:
+#                             # It's the same rank so no need to do anything too fancy
+#                             all_new_decoder_input_ids_and_mask_same_rank.append(
+#                                 (new_decoder_input_ids, new_decoder_input_mask)
+#                             )
+#                         else:
+#                             pipeline_state.register_send_activation(
+#                                 new_decoder_input_ids, to_rank=decoder_input_rank, p2p=p2p
+#                             )
+#                             pipeline_state.register_send_activation(
+#                                 new_decoder_input_mask, to_rank=decoder_input_rank, p2p=p2p
+#                             )
+#                             if not is_max_nb_microbatches and state_id == number_states_in_buffer - 1:
+#                                 # Send new_decoder_input_ids AND new_decoder_input_ids
+#                                 pipeline_state.run_communication()
+#                                 pipeline_state.run_communication()
+
+#                     else:
+#                         assert isinstance(sharded_logits, TensorPointer)
+
+#                 all_new_decoder_input_ids_and_mask: Iterable[
+#                     Tuple[Union[torch.LongTensor, TensorPointer], Union[torch.BoolTensor, TensorPointer]]
+#                 ]
+#                 if is_decoder_input_rank:
+#                     # We receive the tensor from other ranks unless `decoder_input_rank` == `decoder_logit_rank` in which case `all_new_decoder_input_ids` is already populated.
+#                     if decoder_input_rank == decoder_logit_rank:
+#                         # `all_new_decoder_input_ids_and_mask_same_rank` is already populated. Since `decoder_input_rank` and `decoder_logit_rank` are the same, there's no need to communicate as we can just store the new input_ids in a list.
+#                         assert len(all_new_decoder_input_ids_and_mask_same_rank) == number_states_in_buffer
+#                         all_new_decoder_input_ids_and_mask = all_new_decoder_input_ids_and_mask_same_rank
+#                     else:
+
+#                         def generator():
+#                             for _ in range(number_states_in_buffer):
+#                                 pipeline_state.register_recv_activation(from_rank=decoder_logit_rank, p2p=p2p)
+#                                 pipeline_state.register_recv_activation(from_rank=decoder_logit_rank, p2p=p2p)
+#                                 while len(pipeline_state.activations_buffer) < 2:
+#                                     pipeline_state.run_communication()
+#                                 new_decoder_input_ids = pipeline_state.activations_buffer.popleft()
+#                                 new_decoder_input_mask = pipeline_state.activations_buffer.popleft()
+#                                 yield new_decoder_input_ids, new_decoder_input_mask
+
+#                         all_new_decoder_input_ids_and_mask = iter(generator())
+#                 else:
+#                     all_new_decoder_input_ids_and_mask = (
+#                         (TensorPointer(group_rank=decoder_input_rank), TensorPointer(group_rank=decoder_input_rank))
+#                         for _ in range(number_states_in_buffer)
+#                     )
+
+#                 # Create new decoder states
+#                 decoder_states = (
+#                     GenerationStates(
+#                         new_input_ids=new_decoder_input_ids_and_mask[0],
+#                         new_input_mask=new_decoder_input_ids_and_mask[1],
+#                         store=state.store,
+#                         generation_ids=state.generation_ids + [new_decoder_input_ids_and_mask[0]],
+#                         generation_mask=state.generation_mask + [new_decoder_input_ids_and_mask[1]],
+#                     )
+#                     for state, new_decoder_input_ids_and_mask in zip(
+#                         new_decoder_states, all_new_decoder_input_ids_and_mask
+#                     )
+#                 )
+
+#             if is_bench:
+#                 # Compute throughput (tok/s/gpu). Note that the first generation is done with full seq_len, so we don't count it.
+#                 torch.cuda.synchronize()
+#                 total_time_sec = time.perf_counter() - start_time - elapsed_time_first_iteration
+#                 # We generate 1 token per iteration per batch (batch=microbatch)
+#                 # Number of tokens generated every iteration: gbs/iteration_time
+#                 global_batch_size = len(batches) * parallel_context.dp_pg.size()
+#                 tokens_per_sec = global_batch_size * max_new_tokens / total_time_sec
+
+#                 model_tflops, hardware_tflops = model.get_flops_per_sec(
+#                     iteration_time_in_sec=total_time_sec,
+#                     sequence_length=max_new_tokens,
+#                     global_batch_size=global_batch_size,
+#                 )
+
+#                 bench_config = BenchArgs(
+#                     model_name=model.config._name_or_path,
+#                     sequence_length=max_new_tokens,
+#                     micro_batch_size=max_micro_batch_size,
+#                     batch_accumulation_per_replica=1,
+#                     benchmark_csv_path="benchmark.csv",
+#                 )
+
+#                 model_size = sum(
+#                     [p.numel() * p.data.element_size() for p in chain(model.parameters(), model.buffers())]
+#                 )
+
+#                 log_throughput(
+#                     bench_config,
+#                     parallel_context,
+#                     model_tflops,
+#                     hardware_tflops,
+#                     tokens_per_sec,
+#                     bandwidth=model_size * tokens_per_sec / 1e9,
+#                 )
+
+#             # Flush communication
+#             for _ in range(
+#                 max(
+#                     len(pipeline_state.microbatches_activations_to_send),
+#                     len(pipeline_state.microbatches_activations_to_recv),
+#                 )
+#             ):
+#                 pipeline_state.run_communication()
+#             assert len(pipeline_state.microbatches_activations_to_send) == 0
+#             assert len(pipeline_state.microbatches_activations_to_recv) == 0
+
+#             # Yield result
+#             decoder_states = list(decoder_states)
+#             for state, batch in zip(decoder_states, batches):
+#                 if is_decoder_input_rank:
+#                     assert all(isinstance(elt, torch.Tensor) for elt in state.generation_ids)
+#                     batch_generated_ids = torch.cat(state.generation_ids, dim=-1)
+#                     batch_generated_mask = torch.cat(state.generation_mask, dim=-1)
+#                 else:
+#                     assert all(isinstance(elt, TensorPointer) for elt in state.generation_ids)
+#                     batch_generated_ids = TensorPointer(group_rank=decoder_input_rank)
+#                     batch_generated_mask = TensorPointer(group_rank=decoder_input_rank)
+
+#                 # Broadcast all data
+#                 batch_generated_ids, batch_generated_mask = broadcast_tensors(
+#                     [batch_generated_ids, batch_generated_mask],
+#                     group_src=decoder_input_rank,
+#                     group=parallel_context.pp_pg,
+#                 )
+#                 batch.input_ids, batch.input_masks = broadcast_tensors(
+#                     [batch.input_ids, batch.input_masks], group_src=decoder_input_rank, group=parallel_context.pp_pg
+#                 )
+
+#                 # Flush the store to release memory
+#                 state.store.flush()
+#                 assert len(state.store) == 0
+
+#                 if dist.get_rank(parallel_context.pp_pg) == decoder_input_rank:
+#                     assert (
+#                         batch_generated_ids.shape[0] == batch.input_ids.shape[0]
+#                     ), f"Batch size needs to match {batch_generated_ids.shape[0]} != {batch.input_ids.shape[0]}"
+#                     assert (
+#                         batch_generated_mask.shape[0] == batch.input_ids.shape[0]
+#                     ), f"Batch size needs to match {batch_generated_mask.shape[0]} != {batch.input_ids.shape[0]}"
+#                     assert (
+#                         batch_generated_ids.shape[1] == batch_generated_mask.shape[1]
+#                     ), f"Sequence length needs to match {batch_generated_ids.shape[1]} != {batch_generated_mask.shape[0]}"
+
+#                 for i, (generated_ids, generated_mask) in enumerate(zip(batch_generated_ids, batch_generated_mask)):
+#                     # TODO @thomasw21: We could actually have all ranks return the output, since it's been already broadcasted
+#                     if dist.get_rank(parallel_context.pp_pg) == decoder_input_rank:
+#                         input_ids = batch.input_ids[i]
+#                         input_mask = batch.input_masks[i]
+#                         yield GenerationOutput(
+#                             input_ids=input_ids[input_mask],
+#                             generation_ids=generated_ids[generated_mask],
+#                         )
+#                     else:
+#                         yield GenerationOutput(
+#                             input_ids=TensorPointer(group_rank=decoder_input_rank),
+#                             generation_ids=TensorPointer(group_rank=decoder_input_rank),
+#                         )
 
 
 @torch.inference_mode()
