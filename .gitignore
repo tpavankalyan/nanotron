@@ -171,3 +171,5 @@ eval_results/
 tb_logs/
 .nanoset_cache/
 hf_models/
+evaluation_results/
+*.pkl

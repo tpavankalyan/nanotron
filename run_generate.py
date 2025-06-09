@@ -63,7 +63,7 @@ def get_args():
     parser.add_argument("--dp", type=int, default=4)
     parser.add_argument("--pp", type=int, default=0)
     parser.add_argument("--tp", type=int, default=0)
-    parser.add_argument("--max-new-tokens", type=int, default=256, help="Maximum number of new tokens to generate")
+    parser.add_argument("--max-new-tokens", type=int, default=800, help="Maximum number of new tokens to generate")
     parser.add_argument("--use-cache", action="store_true", help="Use KV cache to speed up generation")
     return parser.parse_args()
 
@@ -168,11 +168,9 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
-        dummy_inputs = ["""<|user|>Tell me a word that starts with the letter "A"
-<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
-<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
-<|assistant|>""", """<|user|>Tell me a word that starts with the letter "A"
-<|assistant|>"""]
+        dummy_inputs = ["""<|user|>
+What is 3+2?<|assistant|>
+""",]
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -181,7 +179,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="top_k", use_cache=args.use_cache),
+            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
