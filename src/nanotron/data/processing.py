@@ -43,7 +43,13 @@ def clm_process(
         Processed dataset with tokenized sequences
     """
     # Adapted from https://github.com/huggingface/transformers/blob/47e1676255e5dd86b9541f734cd4f4bdcbb50f4a/examples/pytorch/language-modeling/run_clm.py#L391-L439
-
+    
+    print(f"Tokenizer vocab size: {len(tokenizer)}")
+    print(f"Tokenizer special tokens: {tokenizer.special_tokens_map}")
+    for token_name, token in tokenizer.special_tokens_map.items():
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        print(f"{token_name}: {token} -> {token_id}")
+    
     def group_texts(examples: Dict[str, List[np.ndarray]]) -> Dict[str, List[np.ndarray]]:
         # Concatenate all texts.
         concatenated_examples = {k: np.concatenate(v) for k, v in examples.items()}
@@ -62,7 +68,8 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False)
+        texts = [text + "<|endoftext|>" for text in texts]  # Filter out empty strings
+        tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False, add_special_tokens=True)
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
