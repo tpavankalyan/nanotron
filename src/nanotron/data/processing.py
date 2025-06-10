@@ -114,6 +114,7 @@ def get_datasets(
         #     - 'dataset1': 0.5
         #     - 'dataset2': 0.3
         #     - 'dataset3': 0.2
+        
         raw_datasets = _get_dataset_mix(hf_dataset_or_datasets, splits=splits)
     elif isinstance(hf_dataset_or_datasets, str):
         # e.g. Dataset = "HuggingFaceH4/testing_alpaca_small"
@@ -124,7 +125,7 @@ def get_datasets(
                 hf_dataset_or_datasets,
                 hf_dataset_config_name,
                 split=split,
-            )
+            ).shuffle(seed=42)
     else:
         raise ValueError(f"hf_dataset_or_datasets must be a dict or string but is {type(hf_dataset_or_datasets)}")
 
