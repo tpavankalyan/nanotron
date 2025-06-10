@@ -278,7 +278,7 @@ def get_train_dataloader(
     seed_worker: int,
     dataloader_drop_last: bool = True,
     dataloader_pin_memory: bool = True,
-    use_loop_to_round_batch_size: bool = False,
+    use_loop_to_round_batch_size: bool = True,
     sequence_sep_tokens: List[int] = None,
     use_position_ids: bool = True,
 ) -> DataLoader:

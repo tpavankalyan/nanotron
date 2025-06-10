@@ -170,6 +170,7 @@ def get_dataloader_from_data_stage(
                 dataloader_drop_last=True,
                 use_position_ids=isinstance(trainer.model_config, Qwen2Config),
                 sequence_sep_tokens=sequence_sep_tokens,  # Used to generate position ids
+                # use_loop_to_round_batch_size=True,
             )
 
             # Check if we have enough samples for train_steps
@@ -177,10 +178,10 @@ def get_dataloader_from_data_stage(
             num_tokens_needed_for_training = (
                 num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
             )
-            assert num_tokens_needed_for_training <= total_tokens_dataset, (
-                f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
-                f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
-            )
+            # assert num_tokens_needed_for_training <= total_tokens_dataset, (
+            #     f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
+            #     f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"
+            # )
 
     # Case 3: Nanosets
     elif isinstance(data.dataset, NanosetDatasetsArgs):
