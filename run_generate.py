@@ -168,6 +168,10 @@ def main():
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
+        import pickle
+        with open("id.pkl", "rb") as f:
+            id_test = pickle.load(f)
+                        
         dummy_inputs = [
             # "The future of AI is",
             "Passage: Daniel went back to the garden. Mary travelled to the kitchen. Sandra journeyed to the kitchen. Sandra went to the hallway. John went to the bedroom. Mary went back to the garden. Where is Mary?\nAnswer:",
@@ -176,6 +180,7 @@ def main():
             # "Advancements in technology will lead to",
             # "Tomorrow's world is shaped by",
         ]
+        dummy_inputs = [t[0] for t in id_test]
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -188,7 +193,7 @@ def main():
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
-        for output in outputs:
+        for k,output in enumerate(outputs):
             input_ids = output.input_ids
             generated_ids = output.generation_ids
             if isinstance(input_ids, TensorPointer):
@@ -198,6 +203,13 @@ def main():
 
             log_rank(
                 f"input: {tokenizer.decode(input_ids, clean_up_tokenization_spaces=False)[:1000]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            
+            log_rank(
+                f"===============================",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
@@ -216,13 +228,27 @@ def main():
                 level=logging.INFO,
                 rank=0,
             )
+            
+            log_rank(
+                f"ground truths: {dummy_inputs[k]}",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
+            
+            log_rank(
+                f"***********************************************",
+                logger=logger,
+                level=logging.INFO,
+                rank=0,
+            )
     else:
         outputs = decode_tokenized(
             input_ids=torch.zeros(1, 1).to(dtype=torch.int64, device="cuda"),
             input_mask=torch.ones(1, 1).to(dtype=torch.bool, device="cuda"),
             model=model.model,
             parallel_context=parallel_context,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=True),
+            generation_config=GenerationArgs(sampler="top_p", use_cache=True),
             max_micro_batch_size=1,
             max_new_tokens=12,
             returns_logits=False,

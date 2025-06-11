@@ -296,7 +296,8 @@ def decode_text(
                             position_ids = get_position_ids(state.new_input_ids, tokenizer)
                             sharded_logits = model(
                                 input_ids=state.new_input_ids,
-                                position_ids=position_ids,  # [batch_size, seq_len]
+                                # position_ids=position_ids,  # [batch_size, seq_len]
+                                input_mask=batch_generated_mask,
                             )
                     else:
                         if isinstance(state.new_input_ids, torch.Tensor):
@@ -308,7 +309,8 @@ def decode_text(
                         position_ids = get_position_ids(batch_generated_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=batch_generated_ids,
-                            position_ids=position_ids,  # [batch_size, seq_len]
+                            # position_ids=position_ids,  # [batch_size, seq_len]
+                            input_mask=batch_generated_mask,
                         )  # [batch_size*seq_len, vocab_size]
 
                     sharded_logits = sharded_logits.view(*position_ids.shape, -1)  # [batch_size, seq_len, vocab_size]
@@ -618,7 +620,8 @@ def decode_tokenized(
                         position_ids = get_position_ids(state.new_input_ids, tokenizer)
                         sharded_logits = model(
                             input_ids=state.new_input_ids,
-                            position_ids=position_ids,  # [batch_size, seq_len]
+                            # position_ids=position_ids,  # [batch_size, seq_len]
+                            input_mask=batch_generated_mask,
                         )
                         if isinstance(sharded_logits, torch.Tensor):
                             sharded_logits = sharded_logits.transpose(0, 1)

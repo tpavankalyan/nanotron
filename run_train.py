@@ -167,10 +167,10 @@ def get_dataloader_from_data_stage(
                 consumed_train_samples=consumed_train_samples,
                 dataloader_num_workers=data.num_loading_workers,
                 seed_worker=data.seed,
-                dataloader_drop_last=True,
+                dataloader_drop_last=False,
                 use_position_ids=isinstance(trainer.model_config, Qwen2Config),
                 sequence_sep_tokens=sequence_sep_tokens,  # Used to generate position ids
-                # use_loop_to_round_batch_size=True,
+                use_loop_to_round_batch_size=True,
             )
 
             # Check if we have enough samples for train_steps
@@ -178,6 +178,9 @@ def get_dataloader_from_data_stage(
             num_tokens_needed_for_training = (
                 num_remaining_train_steps * trainer.global_batch_size * trainer.sequence_length
             )
+            print(total_tokens_dataset)
+            print(len(dataloader.dataset))
+            print(num_tokens_needed_for_training)
             # assert num_tokens_needed_for_training <= total_tokens_dataset, (
             #     f"Dataset is too small for steps ({total_tokens_dataset} < {num_tokens_needed_for_training}), "
             #     f"Try train_steps<={len(dataloader.dataset) // trainer.global_batch_size + trainer.iteration_step}"

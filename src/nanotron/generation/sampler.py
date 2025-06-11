@@ -270,6 +270,9 @@ class BasicSampler(Sampler):
 
         local_sharded_logits_in = list(torch.split(sharded_logits, in_split, dim=0))
         local_sharded_logits_out = list(torch.split(sharded_logits_out, out_split, dim=0))
+        
+        local_sharded_logits_out = [t.contiguous() for t in local_sharded_logits_out]
+        local_sharded_logits_in = [t.contiguous() for t in local_sharded_logits_in]
 
         dist.all_to_all(local_sharded_logits_out, local_sharded_logits_in, group=self.pg)
 

@@ -21,7 +21,7 @@ import torch
 import torch.utils.data
 from torch.utils.data import BatchSampler
 from torch.utils.data.distributed import DistributedSampler
-from transformers.trainer_pt_utils import DistributedSamplerWithLoop
+from transformers.trainer_pt_utils import DistributedSamplerWithLoop, InfiniteDistributedSampler, InfiniteDistributedSamplerWithLoop
 
 from nanotron import logging
 from nanotron.logging import log_rank
@@ -66,9 +66,9 @@ def get_sampler(
     train_dataset: Union["torch.utils.data.Dataset", "datasets.Dataset"],
     consumed_train_samples: int,
     seed: int = 42,
-    use_loop_to_round_batch_size: bool = False,
+    use_loop_to_round_batch_size: bool = True,
     micro_batch_size: Optional[int] = None,
-    drop_last: Optional[bool] = True,
+    drop_last: Optional[bool] = False,
     shuffle: bool = False,
 ) -> Optional[torch.utils.data.Sampler]:
     """
@@ -91,8 +91,18 @@ def get_sampler(
     """
     if use_loop_to_round_batch_size:
         assert micro_batch_size is not None
+        print("using DistributedSamplerWithLoop to round batch size")
         # loops at the end back to the beginning of the shuffled samples to make each process have a round multiple of batch_size samples.
-        sampler = DistributedSamplerWithLoop(
+        # sampler = DistributedSamplerWithLoop(
+        #     train_dataset,
+        #     batch_size=micro_batch_size,
+        #     num_replicas=dl_ranks_size,
+        #     rank=dl_rank,
+        #     seed=seed,
+        #     drop_last=drop_last,
+        # )
+        
+        sampler = InfiniteDistributedSamplerWithLoop(
             train_dataset,
             batch_size=micro_batch_size,
             num_replicas=dl_ranks_size,
