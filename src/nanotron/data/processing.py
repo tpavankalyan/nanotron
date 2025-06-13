@@ -68,14 +68,14 @@ def clm_process(
         return result
 
     def _tokenize_and_group_texts(texts: List[str]) -> Dict[str, List[np.ndarray]]:
-        texts = [text + "<|endoftext|>" for text in texts] 
+        texts = [text + "<|endoftext|>" for text in texts] #add tags for instruction response
         tokenized_batch = tokenizer.batch_encode_plus(texts, return_attention_mask=False, return_token_type_ids=False, add_special_tokens=True)
         tokenized_batch = {k: [np.array(tokenized_texts) for tokenized_texts in v] for k, v in tokenized_batch.items()}
         return group_texts(tokenized_batch)
 
     train_dataset = raw_dataset.map(
         _tokenize_and_group_texts,
-        input_columns=text_column_name,
+        input_columns=text_column_name, #change to ["instruction", "response"]
         remove_columns=raw_dataset.column_names,
         features=Features({"input_ids": Sequence(feature=Value(dtype="int64"), length=sequence_length + 1)}),
         batched=True,

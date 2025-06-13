@@ -1,6 +1,6 @@
 checkpoints:
   checkpoint_interval: 2000
-  checkpoints_path: checkpoints/stage0_context_cleaned_1
+  checkpoints_path: checkpoints/stage0_mix
   checkpoints_path_is_shared_file_system: false
   resume_checkpoint_path: null
   save_initial_state: false
@@ -11,9 +11,9 @@ checkpoints:
 data_stages:
 - data:
     dataset:
-      hf_dataset_or_datasets: Pavankalyan/stage0_context_cleaned
+      hf_dataset_or_datasets: Pavankalyan/stage0_all_text_only
       hf_dataset_splits: train
-      text_column_name: output
+      text_column_name: text
       dataset_processing_num_proc_per_process: 16
       dataset_overwrite_cache: true
       
@@ -27,7 +27,7 @@ general:
   consumed_train_samples: null
   ignore_sanity_checks: true
   project: llama_150m_pretraining
-  run: stage0_%date_%jobid
+  run: stage0_mix_%date_%jobid
   seed: 42
   step: null
 
@@ -77,9 +77,9 @@ optimizer:
   learning_rate_scheduler:
     learning_rate: 3.0e-4
     lr_decay_starting_step: null
-    lr_decay_steps: 5607  # 90% of total steps for cosine decay
+    lr_decay_steps: 3800  # 90% of total steps for cosine decay
     lr_decay_style: cosine
-    lr_warmup_steps: 600 # ~10% of total steps
+    lr_warmup_steps: 423 # ~10% of total steps
     lr_warmup_style: linear
     min_decay_lr: 3.0e-5  # 10% of peak LR
   optimizer_factory:
@@ -126,9 +126,9 @@ tokens:
   batch_accumulation_per_replica: 4
   limit_test_batches: 0
   limit_val_batches: 0
-  micro_batch_size: 24
+  micro_batch_size: 42
   sequence_length: 2048
-  train_steps: 6230  # 4 epochs * (1225312256 / (4 GPUs * 8 micro_batch * 16 accum * 2048 seq_len))
+  train_steps: 4224  # 4 epochs * (1452994560 / 1376256 = (4 GPUs * 42 micro_batch * 4 accum * 2048 seq_len))
   val_check_interval: -1
 
 metrics_logging: null

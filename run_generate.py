@@ -169,7 +169,7 @@ def main():
         tokenizer.padding_side = "left"
         tokenizer.truncation_side = "left"  # TODO @nouamane: do we want this?
         import pickle
-        with open("id.pkl", "rb") as f:
+        with open("od.pkl", "rb") as f:
             id_test = pickle.load(f)
                         
         dummy_inputs = [
@@ -181,6 +181,9 @@ def main():
             # "Tomorrow's world is shaped by",
         ]
         dummy_inputs = [t[0] for t in id_test]
+        dummy_outputs = [t[1] for t in id_test]
+        dummy_inputs = ["<|user|> If you have two apples and I gave you two more, how many apples do you have now?\n<|assistant|> I have two, you gave me two, so I have"]  # For testing with a single input
+        # dummy_inputs = [""]
 
         outputs = decode_text(
             input_iter=(GenerationInput(text=text) for text in dummy_inputs),
@@ -189,7 +192,7 @@ def main():
             parallel_context=parallel_context,
             max_new_tokens=args.max_new_tokens,
             max_micro_batch_size=2,
-            generation_config=GenerationArgs(sampler="greedy", use_cache=args.use_cache),
+            generation_config=GenerationArgs(sampler="top_k", use_cache=args.use_cache),
             tokenizer_config=TokenizerConfig(max_input_length=None),
             is_bench=os.environ.get("USE_BENCH", "0") == "1",
         )
@@ -230,7 +233,7 @@ def main():
             )
             
             log_rank(
-                f"ground truths: {dummy_inputs[k]}",
+                f"ground truths: {dummy_outputs[k]}",
                 logger=logger,
                 level=logging.INFO,
                 rank=0,
